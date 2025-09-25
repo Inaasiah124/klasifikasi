@@ -11,375 +11,511 @@ export default function CoachDashboard() {
   const [clf, setClf] = useState(getClassifications());
   const [users, setUsers] = useState(getUsers());
 
-  // UI state
-  const [selectedTaskId, setSelectedTaskId] = useState('ALL');
-  const [page, setPage] = useState(1);
-  const PAGE_SIZE = 10;
+  // Modal state
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showAudioModal, setShowAudioModal] = useState(false);
+  const [selectedRecording, setSelectedRecording] = useState(null);
+  const [taskForm, setTaskForm] = useState({
+    title: '',
+    instruction: '',
+    selectedMembers: []
+  });
 
-  // modal tambah tugas
-  const [open, setOpen] = useState(false);
-  const [instruction, setInstruction] = useState('');
-  const [selectedMembers, setSelectedMembers] = useState([]);
+  // Search state for members
+  const [memberSearch, setMemberSearch] = useState('');
 
-  // buka modal dari Header
+  // Listen for events
   useEffect(() => {
-    const openHandler = () => setOpen(true);
-    window.addEventListener('openTaskModal', openHandler);
-    return () => window.removeEventListener('openTaskModal', openHandler);
-  }, []);
+    const handleTasksUpdate = () => setTasks(getTasks());
+    const handleRecordingsUpdate = () => setRecs(getRecordings());
+    const handleClassificationsUpdate = () => setClf(getClassifications());
+    const handleOpenTaskModal = () => setShowTaskModal(true);
+    const handleMemberStatusUpdate = () => {
+      // Force re-render when member status changes
+      setUsers([...getUsers()]);
+    };
 
-  // submit tambah tugas
-  const submitTask = (e) => {
-    e.preventDefault();
-    const ok = addTask({ 
-      title: 'Tugas Tes Suara', 
-      instruction,
-      assignedTo: selectedMembers.length > 0 ? selectedMembers : 'ALL'
-    });
-    if (ok) {
-      setInstruction('');
-      setSelectedMembers([]);
-      setOpen(false);
-    } else {
-      alert('Instruksi wajib diisi');
-    }
-  };
+    window.addEventListener('tasks', handleTasksUpdate);
+    window.addEventListener('recordings', handleRecordingsUpdate);
+    window.addEventListener('classifications', handleClassificationsUpdate);
+    window.addEventListener('openTaskModal', handleOpenTaskModal);
+    window.addEventListener('memberStatusUpdate', handleMemberStatusUpdate);
 
-  // sync dari localStorage
-  useEffect(() => {
-    const refetchTasks = () => setTasks(getTasks());
-    const refetchRecs = () => setRecs(getRecordings());
-    const refetchClf = () => setClf(getClassifications());
-    const refetchUsers = () => setUsers(getUsers());
-    window.addEventListener('tasks', refetchTasks);
-    window.addEventListener('recordings', refetchRecs);
-    window.addEventListener('classifications', refetchClf);
-    window.addEventListener('users', refetchUsers);
     return () => {
-      window.removeEventListener('tasks', refetchTasks);
-      window.removeEventListener('recordings', refetchRecs);
-      window.removeEventListener('classifications', refetchClf);
-      window.removeEventListener('users', refetchUsers);
+      window.removeEventListener('tasks', handleTasksUpdate);
+      window.removeEventListener('recordings', handleRecordingsUpdate);
+      window.removeEventListener('classifications', handleClassificationsUpdate);
+      window.removeEventListener('openTaskModal', handleOpenTaskModal);
+      window.removeEventListener('memberStatusUpdate', handleMemberStatusUpdate);
     };
   }, []);
 
-  // gabungkan data untuk tabel
-  const tableData = useMemo(() => {
-    const users = [...new Set(recs.map(r => r.username))];
-    return users.map(username => {
-      const userRecs = recs.filter(r => r.username === username);
-      const latestRec = userRecs.sort((a, b) => b.createdAt - a.createdAt)[0];
-      const latestLabel = latestRec ? clf[`${latestRec.taskId}:${username}`]?.label : null;
-      
-      return {
-        username,
-        jenisSuara: latestLabel || '-',
-        tanggalJoin: latestRec ? new Date(latestRec.createdAt).toLocaleDateString('id-ID') : '-',
-        statusKeanggotaan: 'aktif',
-        checkSuara: latestLabel ? 'sudah' : 'belum',
-        hasilTesSuara: latestLabel || '-'
-      };
-    });
-  }, [recs, clf]);
+  // Filtered members based on search
+  const filteredMembers = useMemo(() => {
+    if (!memberSearch) return users;
+    return users.filter(user => 
+      user.nama.toLowerCase().includes(memberSearch.toLowerCase()) ||
+      user.npm.toLowerCase().includes(memberSearch.toLowerCase())
+    );
+  }, [users, memberSearch]);
 
-  // hitung klasifikasi
-  const classificationCounts = useMemo(() => {
-    const counts = {};
-    Object.values(clf).forEach(item => {
-      if (item.label && item.label !== '-') {
-        counts[item.label] = (counts[item.label] || 0) + 1;
-      }
-    });
-    return counts;
+  // Voice classification stats - only Alto and Sopran
+  const voiceStats = useMemo(() => {
+    const classifications = Object.values(clf);
+    const sopran = classifications.filter(c => c.label === 'Sopran').length;
+    const alto = classifications.filter(c => c.label === 'Alto').length;
+
+    return { sopran, alto };
   }, [clf]);
 
-  // toggle status aktif/tidak aktif untuk user
-  const toggleUserStatus = (username) => {
-    const currentStatus = localStorage.getItem(`user_${username}_active`);
-    const newStatus = currentStatus === 'true' ? 'false' : 'true';
-    localStorage.setItem(`user_${username}_active`, newStatus);
-    window.dispatchEvent(new Event('userStatusChanged'));
+  // Handle task form changes
+  const handleTaskFormChange = (field, value) => {
+    setTaskForm(prev => ({ ...prev, [field]: value }));
   };
 
-  // cek status aktif user
-  const isUserActive = (username) => {
-    return localStorage.getItem(`user_${username}_active`) !== 'false';
+  // Handle member selection
+  const handleMemberToggle = (memberNpm) => {
+    setTaskForm(prev => ({
+      ...prev,
+      selectedMembers: prev.selectedMembers.includes(memberNpm)
+        ? prev.selectedMembers.filter(npm => npm !== memberNpm)
+        : [...prev.selectedMembers, memberNpm]
+    }));
   };
 
-  // toggle anggota yang dipilih
-  const toggleMember = (username) => {
-    setSelectedMembers(prev => 
-      prev.includes(username) 
-        ? prev.filter(u => u !== username)
-        : [...prev, username]
+  // Handle task submission - PERBAIKAN LOGIKA
+  const handleTaskSubmit = () => {
+    if (!taskForm.title.trim()) {
+      alert('Judul tugas harus diisi');
+      return;
+    }
+
+    if (!taskForm.instruction.trim()) {
+      alert('Instruksi harus diisi');
+      return;
+    }
+
+    if (taskForm.selectedMembers.length === 0) {
+      alert('Pilih minimal satu anggota');
+      return;
+    }
+
+    // Create task dengan status untuk anggota yang dipilih
+    const newTask = {
+      id: Date.now().toString(),
+      title: taskForm.title,
+      instruction: taskForm.instruction,
+      createdAt: Date.now(),
+      status: {} // Initialize status object
+    };
+
+    // Set status untuk setiap anggota yang dipilih
+    taskForm.selectedMembers.forEach(npm => {
+      newTask.status[npm] = 'pending';
+    });
+
+    // Add task to storage
+    const currentTasks = getTasks();
+    const updatedTasks = [...currentTasks, newTask];
+    localStorage.setItem('tasks', JSON.stringify(updatedTasks));
+    
+    // Reset form
+    setTaskForm({
+      title: '',
+      instruction: '',
+      selectedMembers: []
+    });
+    setShowTaskModal(false);
+    alert('Tugas berhasil ditambahkan!');
+    
+    // Trigger tasks update event
+    window.dispatchEvent(new Event('tasks'));
+  };
+
+  // Get member name by npm
+  const getMemberName = (npm) => {
+    const user = users.find(u => u.npm === npm);
+    return user ? user.nama : npm;
+  };
+
+  // Toggle member active status
+  const toggleMemberStatus = (npm) => {
+    const currentStatus = localStorage.getItem(`member_${npm}_active`) === 'true';
+    localStorage.setItem(`member_${npm}_active`, (!currentStatus).toString());
+    // Trigger re-render
+    window.dispatchEvent(new Event('memberStatusUpdate'));
+  };
+
+  // Check if member is active
+  const isMemberActive = (npm) => {
+    return localStorage.getItem(`member_${npm}_active`) === 'true';
+  };
+
+  // Get member's voice type
+  const getMemberVoiceType = (npm) => {
+    const classification = Object.values(clf).find(c => 
+      Object.keys(clf).some(key => key.includes(npm))
     );
+    return classification ? classification.label : '-';
   };
 
-  const exportCsv = () => {
-    const rows = [
-      ['Nama', 'Jenis Suara', 'Tanggal Join', 'Status Keanggotaan', 'Check Suara', 'Hasil Tes Suara'],
-      ...tableData.map(r => [
-        r.username,
-        r.jenisSuara,
-        r.tanggalJoin,
-        r.statusKeanggotaan,
-        r.checkSuara,
-        r.hasilTesSuara,
-      ]),
-    ];
-    const csv = rows
-      .map(cols => cols.map(x => `"${String(x).replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'list-anggota-paduan-suara.csv';
-    a.click(); URL.revokeObjectURL(url);
+  // Check if member has done voice check - PERBAIKAN LOGIKA
+  const hasDoneVoiceCheck = (npm) => {
+    // Cek apakah ada rekaman yang sudah didengarkan coach
+    const hasBeenListened = localStorage.getItem(`recording_listened_${npm}`) === 'true';
+    return hasBeenListened ? 'sudah' : 'belum';
+  };
+
+  // Get member's join date (simulated)
+  const getMemberJoinDate = (npm) => {
+    const user = users.find(u => u.npm === npm);
+    if (user && user.createdAt) {
+      return new Date(user.createdAt).toLocaleDateString('id-ID');
+    }
+    return '20/09/2025'; // Default date
+  };
+
+  // Get recordings for a specific user
+  const getUserRecordings = (npm) => {
+    return recs.filter(rec => rec.username === npm);
+  };
+
+  // Handle audio playback - PERBAIKAN LOGIKA
+  const handlePlayRecording = (recording) => {
+    setSelectedRecording(recording);
+    setShowAudioModal(true);
+    
+    // Mark recording as listened by coach
+    localStorage.setItem(`recording_listened_${recording.username}`, 'true');
+    
+    // Trigger re-render to update status
+    window.dispatchEvent(new Event('memberStatusUpdate'));
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6">
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-500 to-blue-600 px-6 py-4">
-            <div className="flex items-center">
-              <div className="p-3 bg-white/20 rounded-lg">
-                <span className="text-2xl">👥</span>
-              </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-white/90">Total Anggota</p>
-                <p className="text-2xl font-bold text-white">{tableData.length}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-green-500 to-green-600 px-6 py-4">
-            <div className="flex items-center">
-              <div className="p-3 bg-white/20 rounded-lg">
-                <span className="text-2xl">✅</span>
-              </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-white/90">Sudah Check</p>
-                <p className="text-2xl font-bold text-white">
-                  {tableData.filter(t => t.checkSuara === 'sudah').length}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-yellow-500 to-yellow-600 px-6 py-4">
-            <div className="flex items-center">
-              <div className="p-3 bg-white/20 rounded-lg">
-                <span className="text-2xl">⏳</span>
-              </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-white/90">Belum Check</p>
-                <p className="text-2xl font-bold text-white">
-                  {tableData.filter(t => t.checkSuara === 'belum').length}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-purple-500 to-purple-600 px-6 py-4">
-            <div className="flex items-center">
-              <div className="p-3 bg-white/20 rounded-lg">
-                <span className="text-2xl">��</span>
-              </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-white/90">Total Rekaman</p>
-                <p className="text-2xl font-bold text-white">{recs.length}</p>
-              </div>
-            </div>
-          </div>
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 px-6 py-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gray-800">Hello, Coach</h1>
+          {/* Tombol Tambah Tugas dihapus - sudah ada di Header */}
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        
-        {/* KIRI: List Anggota Paduan Suara */}
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="bg-gradient-to-r from-gray-700 to-gray-800 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-white">List Anggota Paduan Suara</h2>
-              <button
-                onClick={exportCsv}
-                className="px-3 py-1 text-sm bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors"
-              >
-                📊 Export CSV
-              </button>
+      {/* Main Content */}
+      <div className="flex">
+        {/* Left Section - Members Table */}
+        <div className="flex-1 p-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            {/* Header Card */}
+            <div className="bg-gradient-to-r from-red-500 to-red-600 px-6 py-4">
+              <h2 className="text-xl font-bold text-white text-center">List Anggota Paduan Suara</h2>
             </div>
             
+            {/* Table */}
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Jenis Suara</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tanggal Join</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Check Suara</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">Nama</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">Jenis Suara</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">Tanggal Join</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">Status</th>
+                    <th className="px-6 py-4 text-left text-sm font-medium text-gray-700">Check Suara</th>
+                    <th className="px-6 py-4 text-center text-sm font-medium text-gray-700">Rekaman</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {tableData.map((row, index) => (
-                    <tr key={index} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="w-8 h-8 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full flex items-center justify-center text-white font-medium text-sm">
-                            {row.username.charAt(0).toUpperCase()}
+                  {users.map((user, index) => {
+                    const userRecordings = getUserRecordings(user.npm);
+                    return (
+                      <tr key={user.npm} className="hover:bg-gray-50 transition-colors duration-150">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <div className="flex-shrink-0 h-10 w-10">
+                              <div className="h-10 w-10 rounded-full bg-gradient-to-r from-red-400 to-red-600 flex items-center justify-center">
+                                <span className="text-white font-semibold text-sm">
+                                  {user.nama ? user.nama.charAt(0).toUpperCase() : 'U'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="ml-4">
+                              <div className="text-sm font-medium text-gray-900">{user.nama || '-'}</div>
+                              <div className="text-sm text-gray-500">{user.npm}</div>
+                            </div>
                           </div>
-                          <div className="ml-3">
-                            <div className="text-sm font-medium text-gray-900">{row.username}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          row.jenisSuara !== '-' 
-                            ? 'bg-blue-100 text-blue-800' 
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {row.jenisSuara}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {row.tanggalJoin}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          onClick={() => toggleUserStatus(row.username)}
-                          className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full transition-colors ${
-                            isUserActive(row.username)
-                              ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                              : 'bg-red-100 text-red-800 hover:bg-red-200'
-                          }`}
-                        >
-                          {isUserActive(row.username) ? 'Aktif' : 'Tidak Aktif'}
-                        </button>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          row.checkSuara === 'sudah' 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-yellow-100 text-yellow-800'
-                        }`}>
-                          {row.checkSuara}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        <button className="text-blue-600 hover:text-blue-800 transition-colors">
-                          👁️ Lihat
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                            getMemberVoiceType(user.npm) === 'Sopran' 
+                              ? 'bg-red-100 text-red-700' 
+                              : getMemberVoiceType(user.npm) === 'Alto'
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {getMemberVoiceType(user.npm)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {getMemberJoinDate(user.npm)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <button
+                            onClick={() => toggleMemberStatus(user.npm)}
+                            className={`inline-flex px-3 py-1 text-xs font-medium rounded-full transition-colors duration-200 ${
+                              isMemberActive(user.npm)
+                                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                : 'bg-red-100 text-red-700 hover:bg-red-200'
+                            }`}
+                          >
+                            {isMemberActive(user.npm) ? 'Aktif' : 'Tidak Aktif'}
+                          </button>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                            hasDoneVoiceCheck(user.npm) === 'sudah'
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {hasDoneVoiceCheck(user.npm)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-center">
+                          {userRecordings.length > 0 ? (
+                            <div className="flex items-center justify-center space-x-2">
+                              <span className="text-sm text-gray-500">{userRecordings.length}</span>
+                              <button
+                                onClick={() => handlePlayRecording(userRecordings[0])}
+                                className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded-md text-white bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors duration-200"
+                              >
+                                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 24 24">
+                                  <path d="M8 5v14l11-7z"/>
+                                </svg>
+                                Play
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-sm text-gray-400">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
 
-        {/* KANAN: Hasil Klasifikasi Suara */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-4">
-              <h2 className="text-lg font-semibold text-white">Hasil Klasifikasi Suara</h2>
+        {/* Right Section - Voice Classification Results */}
+        <div className="w-80 bg-white rounded-lg shadow-sm border border-gray-200 m-6">
+          <div className="bg-gradient-to-r from-red-500 to-red-600 px-6 py-4 rounded-t-lg">
+            <h3 className="text-lg font-bold text-white text-center">Hasil Klasifikasi Suara</h3>
+          </div>
+          
+          <div className="p-6 space-y-4">
+            <div className="bg-gradient-to-r from-red-50 to-red-100 rounded-lg p-6 border border-red-200">
+              <div className="text-center">
+                <div className="text-2xl mb-2 text-red-600">��</div>
+                <p className="text-lg font-medium text-red-700">Sopran</p>
+                <p className="text-3xl font-bold text-red-800">{voiceStats.sopran}</p>
+              </div>
             </div>
             
-            <div className="p-6 space-y-4">
-              {Object.entries(classificationCounts).map(([label, count]) => (
-                <div key={label} className="bg-gradient-to-r from-yellow-100 to-amber-100 rounded-xl p-4 border border-yellow-200">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm font-semibold text-gray-900 capitalize">
-                      {label}
-                    </div>
-                    <div className="text-lg font-bold text-gray-900">
-                      {count}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              
-              {Object.keys(classificationCounts).length === 0 && (
-                <div className="text-center py-8">
-                  <div className="text-4xl mb-2">🎵</div>
-                  <div className="text-sm text-gray-500">
-                    Belum ada hasil klasifikasi
-                  </div>
-                </div>
-              )}
+            <div className="bg-gradient-to-r from-red-50 to-red-100 rounded-lg p-6 border border-red-200">
+              <div className="text-center">
+                <div className="text-2xl mb-2 text-red-600">��</div>
+                <p className="text-lg font-medium text-red-700">Alto</p>
+                <p className="text-3xl font-bold text-red-800">{voiceStats.alto}</p>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Modal Tambah Tugas */}
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
-          <div className="relative w-[92vw] max-w-xl rounded-2xl bg-white text-gray-900 shadow-2xl overflow-hidden">
-            <div className="bg-gradient-to-r from-pink-500 to-rose-500 px-6 py-4 flex items-center justify-between">
-              <div className="font-semibold text-lg text-white">Tambah Tugas</div>
-              <button onClick={() => setOpen(false)} className="p-2 hover:bg-white/20 rounded-lg transition-colors text-white">✕</button>
+      {/* Audio Modal */}
+      {showAudioModal && selectedRecording && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-md w-full shadow-xl">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-red-500 to-red-600 px-6 py-4 border-b border-gray-200 rounded-t-lg">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-white">Rekaman Audio</h2>
+                <button
+                  onClick={() => setShowAudioModal(false)}
+                  className="text-white hover:text-red-200 transition-colors duration-200"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
-            <form onSubmit={submitTask} className="p-6 space-y-4">
+            {/* Content */}
+            <div className="p-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nama File:</label>
+                  <p className="text-sm text-gray-900 bg-gray-50 p-2 rounded border border-gray-200">{selectedRecording.fileName}</p>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Anggota:</label>
+                  <p className="text-sm text-gray-900 bg-gray-50 p-2 rounded border border-gray-200">{getMemberName(selectedRecording.username)}</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Audio Player:</label>
+                  <audio controls className="w-full">
+                    <source src={selectedRecording.dataUrl} type={selectedRecording.mime} />
+                    Browser Anda tidak mendukung audio player.
+                  </audio>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 rounded-b-lg flex justify-end">
+              <button
+                onClick={() => setShowAudioModal(false)}
+                className="px-6 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-md hover:from-red-600 hover:to-red-700 transition-colors duration-200"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task Modal */}
+      {showTaskModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-red-500 to-red-600 px-6 py-4 border-b border-gray-200 rounded-t-lg">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-white">Tambah Tugas</h2>
+                <button
+                  onClick={() => setShowTaskModal(false)}
+                  className="text-white hover:text-red-200 transition-colors duration-200"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Title */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Instruksi</label>
-                <textarea
-                  value={instruction}
-                  onChange={e => setInstruction(e.target.value)}
-                  rows={4}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-pink-500"
-                  placeholder="Masukkan instruksi untuk anggota"
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Judul Tugas
+                </label>
+                <input
+                  type="text"
+                  value={taskForm.title}
+                  onChange={(e) => handleTaskFormChange('title', e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent text-gray-900 bg-white"
+                  placeholder="Masukkan judul tugas"
                 />
               </div>
 
+              {/* Instruction */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Pilih Anggota:</label>
-                <div className="border border-gray-300 rounded-lg p-3 max-h-40 overflow-y-auto">
-                  {users.filter(u => u.role !== 'pelatih').map(user => (
-                    <label key={user.username} className="flex items-center gap-2 text-sm mb-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedMembers.includes(user.username)}
-                        onChange={() => toggleMember(user.username)}
-                        className="rounded"
-                      />
-                      <span>{user.username}</span>
-                    </label>
-                  ))}
-                  {users.filter(u => u.role !== 'pelatih').length === 0 && (
-                    <p className="text-sm text-gray-500">Belum ada anggota</p>
-                  )}
-                </div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Instruksi untuk Anggota
+                </label>
+                <textarea
+                  value={taskForm.instruction}
+                  onChange={(e) => handleTaskFormChange('instruction', e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent resize-none text-gray-900 bg-white"
+                  rows={6}
+                  placeholder="Masukkan instruksi yang akan muncul di modal rekam anggota, contoh:&#10;&#10;nyanyikan potongan lagu manusia kuat&#10;&#10;Manusia-manusia kuat, itu kita&#10;Jiwa-jiwa yang kuat, itu kita&#10;Manusia-manusia kuat, itu kita&#10;Jiwa-jiwa yang kuat, itu kita"
+                />
               </div>
 
-              <div className="pt-4 flex justify-end gap-3">
-                <button 
-                  type="button" 
-                  onClick={() => setOpen(false)} 
-                  className="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
-                >
-                  Batal
-                </button>
-                <button 
-                  type="submit" 
-                  className="px-4 py-2 rounded-lg bg-pink-600 hover:bg-pink-700 text-white transition-colors"
-                >
-                  Kirim
-                </button>
+              {/* Member Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Pilih Anggota:
+                </label>
+                
+                {/* Search Input */}
+                <div className="relative mb-4">
+                  <input
+                    type="text"
+                    value={memberSearch}
+                    onChange={(e) => setMemberSearch(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent text-gray-900 bg-white"
+                    placeholder="Cari anggota..."
+                  />
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </div>
+                </div>
+
+                {/* Member List */}
+                <div className="bg-gray-50 rounded-lg p-4 max-h-60 overflow-y-auto border border-gray-200">
+                  {filteredMembers.length === 0 ? (
+                    <p className="text-gray-500 text-center py-4">Tidak ada anggota ditemukan</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {filteredMembers.map(user => (
+                        <label key={user.npm} className="flex items-center space-x-3 p-2 hover:bg-white rounded-lg cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={taskForm.selectedMembers.includes(user.npm)}
+                            onChange={() => handleMemberToggle(user.npm)}
+                            className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500"
+                          />
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-800">{user.nama}</p>
+                            <p className="text-sm text-gray-600">{user.npm}</p>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Selected Members Summary */}
+                {taskForm.selectedMembers.length > 0 && (
+                  <div className="mt-4 p-3 bg-red-50 rounded-lg border border-red-200">
+                    <p className="text-sm font-medium text-red-700 mb-2">
+                      Anggota Terpilih ({taskForm.selectedMembers.length}):
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {taskForm.selectedMembers.map(npm => (
+                        <span key={npm} className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded-full">
+                          {getMemberName(npm)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            </form>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 rounded-b-lg flex justify-end space-x-3">
+              <button
+                onClick={() => setShowTaskModal(false)}
+                className="px-6 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors duration-200"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleTaskSubmit}
+                className="px-6 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-md hover:from-red-600 hover:to-red-700 transition-colors duration-200"
+              >
+                Kirim
+              </button>
+            </div>
           </div>
         </div>
       )}

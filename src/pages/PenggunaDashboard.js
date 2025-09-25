@@ -11,7 +11,14 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
   const [tasks, setTasks] = useState(getTasks());
   const [clf, setClf] = useState(getClassifications());
   const [recs, setRecs] = useState(getRecordings());
-  const [isActive, setIsActive] = useState(false); // Default false, harus diaktifkan coach
+  
+  // Get NPM from localStorage
+  const npm = localStorage.getItem('npm') || username;
+  
+  // Check if user is active (from coach dashboard)
+  const [isActive, setIsActive] = useState(() => {
+    return localStorage.getItem(`member_${npm}_active`) === 'true';
+  });
 
   // modal state
   const [showRecordModal, setShowRecordModal] = useState(false);
@@ -49,36 +56,39 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
     return () => window.removeEventListener('openUploadModal', openHandler);
   }, []);
 
-  // cek status aktif user - default false, harus diaktifkan coach
+  // Listen for member status updates from coach dashboard
   useEffect(() => {
-    const checkUserStatus = () => {
-      const userActive = localStorage.getItem(`user_${username}_active`) === 'true';
+    const handleMemberStatusUpdate = () => {
+      const userActive = localStorage.getItem(`member_${npm}_active`) === 'true';
       setIsActive(userActive);
     };
     
-    checkUserStatus();
-    window.addEventListener('userStatusChanged', checkUserStatus);
-    return () => window.removeEventListener('userStatusChanged', checkUserStatus);
-  }, [username]);
+    window.addEventListener('memberStatusUpdate', handleMemberStatusUpdate);
+    return () => window.removeEventListener('memberStatusUpdate', handleMemberStatusUpdate);
+  }, [npm]);
 
-  // ambil tugas terbaru untuk user
+  // ambil tugas terbaru untuk user - PERBAIKAN LOGIKA
   const latestTask = useMemo(() => {
-    return tasks
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .find(task => task.status && task.status[username] !== undefined) || null;
-  }, [tasks, username]);
+    // Jika ada tugas, ambil yang terbaru (meskipun status kosong)
+    if (tasks.length > 0) {
+      // Urutkan berdasarkan tanggal dibuat (terbaru dulu)
+      const sortedTasks = tasks.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      return sortedTasks[0];
+    }
+    return null;
+  }, [tasks]);
 
   // ambil hasil klasifikasi terbaru untuk user
   const latestClassification = useMemo(() => {
     if (!latestTask) return null;
-    const key = `${latestTask.id}:${username}`;
+    const key = `${latestTask.id}:${npm}`;
     return clf[key] || null;
-  }, [clf, latestTask, username]);
+  }, [clf, latestTask, npm]);
 
   // data untuk stats cards
   const userRecs = useMemo(() => {
-    return recs.filter(r => r.username === username);
-  }, [recs, username]);
+    return recs.filter(r => r.username === npm);
+  }, [recs, npm]);
 
   const handleCheck = () => {
     if (!isActive) {
@@ -100,7 +110,7 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
       });
 
       const newRecording = {
-        username,
+        username: npm,
         fileName: file.name,
         mime: file.type,
         dataUrl,
@@ -155,7 +165,7 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
       setSecs(0);
       tickRef.current = setInterval(() => setSecs(s => s + 1), 1000);
     } catch {
-      setErr('Gagal mengakses mikrofon. Izinkan mic di browser ya ��');
+      setErr('Gagal mengakses mikrofon. Izinkan mic di browser ya 🎤');
     }
   };
 
@@ -175,7 +185,7 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
     const fileName = `rec_${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`;
     
     const newRecording = {
-      username,
+      username: npm,
       fileName,
       mime: mimeRef.current,
       dataUrl: await new Promise(resolve => {
@@ -223,7 +233,7 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Tugas Selesai</p>
               <p className="text-2xl font-bold text-gray-900">
-                {tasks.filter(t => t.status && t.status[username] === 'done').length}
+                {tasks.filter(t => t.status && t.status[npm] === 'done').length}
               </p>
             </div>
           </div>
@@ -237,7 +247,7 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Tugas Pending</p>
               <p className="text-2xl font-bold text-gray-900">
-                {tasks.filter(t => t.status && t.status[username] === 'pending').length}
+                {tasks.filter(t => t.status && t.status[npm] === 'pending').length}
               </p>
             </div>
           </div>
@@ -266,10 +276,10 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
             <h2 className="text-xl font-semibold text-gray-900 mb-4">Check Jenis Suara</h2>
             
             <div className="mb-6">
-              <h3 className="text-sm font-medium text-gray-700 mb-2">Instruksi!</h3>
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <p className="text-sm text-gray-600">
-                  {latestTask?.instruction || 'belum ada instruksi dari pelatih'}
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Instruksi:</h3>
+              <div className="bg-white border border-gray-300 rounded-lg p-4 shadow-sm">
+                <p className="text-sm text-gray-800 whitespace-pre-line leading-relaxed">
+                  {latestTask?.instruction || 'Belum ada instruksi dari pelatih'}
                 </p>
               </div>
             </div>
@@ -281,9 +291,9 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
                   ? 'bg-green-100 text-green-800' 
                   : 'bg-red-100 text-red-800'
               }`}>
-                <span className="w-2 h-2 rounded-full mr-2 ${
+                <span className={`w-2 h-2 rounded-full mr-2 ${
                   isActive ? 'bg-green-500' : 'bg-red-500'
-                }"></span>
+                }`}></span>
                 {isActive ? 'Akun Aktif' : 'Akun Belum Aktif'}
               </div>
             </div>
@@ -331,68 +341,79 @@ export default function PenggunaDashboard({ username = (localStorage.getItem('us
         onSubmit={handleFileUpload}
       />
 
-      {/* Modal Rekam */}
+      {/* Modal Rekam - Hanya menampilkan instruksi jika ada tugas */}
       {showRecordModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60" onClick={() => setShowRecordModal(false)} />
           <div className="relative w-[92vw] max-w-xl rounded-2xl bg-white text-gray-900 shadow-2xl">
-            <div className="flex items-center justify-between px-6 py-4 border-b">
-              <div className="font-semibold text-lg">Check Jenis Suara</div>
-              <button onClick={() => setShowRecordModal(false)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">✕</button>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div className="font-bold text-xl text-gray-900">Check Jenis Suara</div>
+              <button 
+                onClick={() => setShowRecordModal(false)} 
+                className="text-gray-500 hover:text-gray-700 text-xl font-bold"
+              >
+                ✕
+              </button>
             </div>
 
             <div className="p-6">
-              {/* Instruksi tugas */}
+              {/* Instruksi dari Coach - Hanya tampil jika ada tugas */}
               {latestTask && (
-                <div className="mb-6">
-                  <div className="text-sm font-semibold mb-2">{latestTask.title}</div>
-                  <textarea
-                    readOnly
-                    value={latestTask.instruction}
-                    className="w-full rounded-xl border text-sm p-3"
-                    rows={3}
-                  />
+                <div className="mb-8">
+                  <div className="text-sm font-semibold text-gray-900 mb-3">Instruksi:</div>
+                  <div className="bg-white border border-gray-300 rounded-lg p-4 shadow-sm">
+                    <p className="text-sm text-gray-800 whitespace-pre-line leading-relaxed">
+                      {latestTask.instruction}
+                    </p>
+                  </div>
                 </div>
               )}
 
               {/* Kontrol rekam */}
-              <div className="flex flex-col items-center gap-5">
+              <div className="flex flex-col items-center gap-6">
+                {/* Microphone Button */}
                 <button
                   onClick={recording ? stopRec : startRec}
-                  className={`w-28 h-28 rounded-full flex items-center justify-center shadow
-                              ${recording ? 'bg-rose-600 text-white' : 'bg-white border border-gray-300 text-gray-800'}`}
-                  title={recording ? 'Stop' : 'Mulai'}
+                  className={`w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 ${
+                    recording 
+                      ? 'bg-red-500 text-white hover:bg-red-600' 
+                      : 'bg-purple-500 text-white hover:bg-purple-600'
+                  }`}
+                  title={recording ? 'Stop Recording' : 'Start Recording'}
                 >
-                  <span className="text-3xl">{recording ? '■' : '🎤'}</span>
+                  <span className="text-3xl">🎤</span>
                 </button>
 
-                {/* Player bar */}
-                <div className="w-full max-w-xl">
-                  {previewURL ? (
-                    <audio controls src={previewURL} className="w-full" />
-                  ) : (
-                    <div className="w-full h-10 rounded-xl bg-gray-200 flex items-center px-3 text-gray-700 text-sm">
-                      <span className="mr-2">▶</span>
-                      <div className="flex-1 h-1 bg-gray-400 rounded">
-                        <div className="h-1 bg-pink-500 rounded" style={{ width: `${Math.min(100, (secs/60)*100)}%` }} />
-                      </div>
-                      <span className="ml-3 font-mono">{mmss(secs)}</span>
+                {/* Audio Player/Progress Bar */}
+                <div className="w-full max-w-md">
+                  <div className="flex items-center gap-3">
+                    <button className="text-blue-600 hover:text-blue-800">
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z"/>
+                      </svg>
+                    </button>
+                    <div className="flex-1 h-2 bg-gray-300 rounded-full">
+                      <div className="h-2 bg-blue-500 rounded-full" style={{ width: '0%' }}></div>
                     </div>
-                  )}
+                    <span className="text-sm font-mono text-gray-600 w-12 text-right">00:00</span>
+                  </div>
                 </div>
 
-                <div className="flex gap-2">
+                {/* Action Buttons */}
+                <div className="flex gap-4">
                   <button
                     onClick={resetRec}
                     disabled={!blob && !previewURL}
-                    className="px-3 py-2 rounded-lg border bg-gray-100 text-gray-800 disabled:opacity-50"
+                    className="px-4 py-2 rounded-lg border border-gray-300 bg-gray-100 text-gray-800 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                   >
-                    🔁 Rekam ulang
+                    <span className="text-sm">⏹</span>
+                    Rekam ulang
                   </button>
                   <button
                     onClick={uploadRec}
                     disabled={!blob}
-                    className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+                    className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     Kirim
                   </button>
